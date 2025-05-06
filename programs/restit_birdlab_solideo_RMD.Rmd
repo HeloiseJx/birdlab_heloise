@@ -1,0 +1,155 @@
+---
+title: "restit_birdlab_solideo"
+author: "Heloise Jeux"
+output: html_document
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, 
+                      cache = FALSE,
+                      message = FALSE, 
+                      warning = FALSE)
+```
+
+<br>
+
+## Carte simplifiée des collections
+
+```{r carto_simple}
+carte_collections
+```
+
+<br>
+
+# **EN BREF...** {.tabset .tabset-pills}
+
+<br>
+<font size= "5" >
+...la biodiversité que vous avez observée
+</font>
+<br>
+
+
+Au total, `r nb_observations` observations d'animaux ont été réalisées sur vos sites, réparties en `r div_taxo_insectes` groupes d'espèces floricoles (qui utilisent les fleurs pour se nourrir ou s'abriter). On appelle ces groupes "taxons".\n
+
+
+Nombre total d'espèces observées sur votre site parmi la liste des 29 espèces : 
+```{r }
+gauge(value = n_distinct(dt_birdlab_local$espece), min = 0, max = 29)
+```
+
+top 5 des animaux les moins observés : 
+```{r }
+plot_flop_occurence_sp
+```
+
+
+Top 5 des plantes les plus observés : 
+```{r }
+plot_top_obs_plante
+```
+
+<br>
+
+**Votre communauté d'espèces en bref : **
+
+Répartition des observations par groupe taxonomique d’espèces floricoles
+```{r}
+pourcent_taxo_tot
+```
+
+Répartition des observations par familles botaniques
+```{r}
+pourcent_taxo_tot_plantes
+```
+
+
+
+
+
+<br>
+<font size= "5" >
+ ...la participation sur votre site 
+</font>
+<br>
+
+Nombre total de participants sur le site : `r nb_participants_tot`, dont `r nb_participants_an` ont participé depuis janvier de cette année. 
+
+<br>
+
+Nombre de gros participants et grosses participantes sur votre site (plus de 20 collections, au total, depuis le début des relevés) : `r nb_gros_participants` 
+
+<br>
+
+`r nb_petits_participants` n'ont participé qu'une seule fois...
+
+<br>
+
+Evolution de la participation et du nombre de participants sur votre site : 
+
+```{r}
+plot_participants_participation
+```
+
+
+
+
+
+<br>
+<font size= "5" >
+...la communauté spipollienne de votre site
+</font>
+<br>
+L'importance de s'impliquer sur le long terme et d'intéragir avec les autres participants en validant leurs observations
+<br>
+Nombre de valideurs-valideuses sur le site : `r nb_tot_valideurs` 
+
+<br>
+Pourcentage d'observations validées 3 fois : `r pourcent_valide`
+3 validations par la communauté de spipolliennes et spipolliens sont nécessaires pour intégrer l'observation dans les analyses.
+
+<br>
+*Importance de participer plusieurs fois :* 
+<br>
+
+Participer au spipoll plusieurs fois c'est améliorer ses connaissances !
+```{r}
+plot_activite_participants
+```
+<br>
+fidelisation des participant-es
+<br>
+```{r plot fidel participants}
+plot_fidel_participant
+```
+
+
+<br>
+Participer au spipoll plusieurs fois c'est améliorer les connaissances sur la biodiversité du site.
+```{r}
+richesse_taxo_cumul_insecte
+```
+
+
+
+<br>
+Avenir : 
+
+<br>
+
+# **Ce que vos observations indiquent sur les interactions entre plantes et pollinisateurs de votre site** 
+<br>
+
+
+# **Les pressions qui s'exercent sur votre site **
+```{r lien faire diagramme ternaire sur R}
+# packages = c('ggtern', 'plotly', 'readr', 'dplyr', 'tidyr')
+# https://rpubs.com/tskam/ternary_plot
+# ggtern(data = , aes(x = %urbain,y = %rural, z = %semi-naturel)) + geom_point(coord site)
+```

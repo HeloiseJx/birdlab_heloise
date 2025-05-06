@@ -27,3 +27,5 @@ library(viridis)
 library(forcats)
 library(patchwork)
 library(ineq)
+library(flexdashboard) # pour le graphe jauge
+library(fmsb) # diag radar
