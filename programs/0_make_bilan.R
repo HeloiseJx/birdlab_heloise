@@ -5,7 +5,10 @@ source("programs/library.R")
 
 data_birdlab = readRDS("data/data_birdlab_2025-04-30.rds") %>%
   mutate(year = year(date), 
-         month = month(date))
+         month = month(date)) %>%
+  # suppression de la mention mâle ou femelle pour ne garder que les espèces
+  mutate(espece = str_remove_all(espece, "(?i)\\s*\\(?\\b(mâle|femelle)\\b\\)?") %>% 
+           str_squish()) # enleve les espaces restants
 
 
 
@@ -62,5 +65,9 @@ source(here::here("programs", "filtre_spatial.R"))
 
 
 
+source(here::here("programs", "indic_locaux.R"))
+
+
+# source(here::here("programs", "render.R"))
 
 

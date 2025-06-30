@@ -1,7 +1,6 @@
 ---
 title: "restit_birdlab_solideo"
 author: "Heloise Jeux"
-output: html_document
 date: "`r Sys.Date()`"
 output:
   html_document:
@@ -21,6 +20,7 @@ knitr::opts_chunk$set(echo = FALSE,
 
 ## Carte simplifiée des collections
 
+/!\ AVANT QUELLE DATE EST-CE LE BAZAR POUR LES COORD DE MANGEOIRES ?  Ex: ici la mangeoire "Mangeoires" est répliquée plusieurs fois.
 ```{r carto_simple}
 carte_collections
 ```
@@ -36,40 +36,50 @@ carte_collections
 <br>
 
 
-Au total, `r nb_observations` observations d'animaux ont été réalisées sur vos sites, réparties en `r div_taxo_insectes` groupes d'espèces floricoles (qui utilisent les fleurs pour se nourrir ou s'abriter). On appelle ces groupes "taxons".\n
+Au total, `r nb_sp_tot_local` espèces d'oiseaux ont été observées sur votre site sur `r nb_mangeoire_local` mangeoires. Dans votre référentiel, `r nb_sp_tot_ref` espèces ont été observées. 
+.\n
 
-
-Nombre total d'espèces observées sur votre site parmi la liste des 29 espèces : 
+Nombre total d'espèces observées sur votre site parmi la liste des 30 espèces sur la saison en cours, ou si celle si est finie, lors de la dernière saison : 
 ```{r }
-gauge(value = n_distinct(dt_birdlab_local$espece), min = 0, max = 29)
+jauge_saison_en_cours
 ```
 
-top 5 des animaux les moins observés : 
+Nombre total d'espèces observées sur votre site parmi la liste des 30 espèces : 
 ```{r }
-plot_flop_occurence_sp
+jauge_total
 ```
 
 
-Top 5 des plantes les plus observés : 
+
+En moyenne sur les mangeoires de votre site, vous pouvez espérer voir environ `r round(nb_moy_esp_partie_local)` espèces. Dans le référentiel, c'est en moyenne `r round(nb_moy_esp_partie_ref)` espèces qui sont observées par parties.
+
+
+
+
+
+
+
+
+
+Fréquences d'observation des espèces : 
+Ce graphe décrit les probabilités que vous avez d'observer les espèces sur votre site.
 ```{r }
-plot_top_obs_plante
+func_plot_freq_combi()
 ```
 
+Idées d'indicateurs supplémentaires : 
+<br>
+- temps moyen par espèce passé à la mangeoire 
+<br>
+- réseau d'association : espèces présentes simultanément aux mangeoires ? à la même mangeoire ? 
+<br>
+- phénologie des espèces au cours de la saison ? au cours de la journée en combinant les observations ? 
+<br>
 <br>
 
-**Votre communauté d'espèces en bref : **
-
-Répartition des observations par groupe taxonomique d’espèces floricoles
-```{r}
-pourcent_taxo_tot
+```{r }
+func_test_reseau_asso()
 ```
-
-Répartition des observations par familles botaniques
-```{r}
-pourcent_taxo_tot_plantes
-```
-
-
 
 
 
@@ -79,72 +89,72 @@ pourcent_taxo_tot_plantes
 </font>
 <br>
 
-Nombre total de participants sur le site : `r nb_participants_tot`, dont `r nb_participants_an` ont participé depuis janvier de cette année. 
+Nombre de mangeoires sur le site : `r nb_mangeoire_local`, de type : `r type_mangeoire`.
+<br>
+
+Nombre total de participants sur le site : `r ntot_participant`
 
 <br>
 
-Nombre de gros participants et grosses participantes sur votre site (plus de 20 collections, au total, depuis le début des relevés) : `r nb_gros_participants` 
-
-<br>
-
-`r nb_petits_participants` n'ont participé qu'une seule fois...
-
-<br>
-
-Evolution de la participation et du nombre de participants sur votre site : 
+Evolution du nombre de participants sur votre site : 
 
 ```{r}
-plot_participants_participation
+plot_evol_participant
 ```
 
+<br>
 
-
-
+Nombre de parties jouées localement : `r ntot_partie`
+```{r}
+plot_evol_participation
+```
 
 <br>
+
+Nombre de gros participants et grosses participantes sur votre site (plus de 20 collections, au total, depuis le début des relevés) : `r participant_gros` 
+<br>
+
+`r participant_1_partie` n'ont participé qu'une seule fois...
+<br>
+
+En moyenne sur votre site, les participants participent `r round(participant_moy)` fois. Dans le référentiel, en moyenne, les participants réalisent `r round(participant_moy_ref)` parties.
+<br>
+
+
+Répartition des participants selon leur niveau :
+```{r}
+plot_niv_participant
+```
+<br>
+
+
 <font size= "5" >
-...la communauté spipollienne de votre site
+Pourquoi s'impliquer sur le long terme dans le programme :
 </font>
-<br>
-L'importance de s'impliquer sur le long terme et d'intéragir avec les autres participants en validant leurs observations
-<br>
-Nombre de valideurs-valideuses sur le site : `r nb_tot_valideurs` 
 
 <br>
-Pourcentage d'observations validées 3 fois : `r pourcent_valide`
-3 validations par la communauté de spipolliennes et spipolliens sont nécessaires pour intégrer l'observation dans les analyses.
 
-<br>
-*Importance de participer plusieurs fois :* 
-<br>
-
-Participer au spipoll plusieurs fois c'est améliorer ses connaissances !
+Vos connaissances s'améliorent et votre niveau progresse :
 ```{r}
-plot_activite_participants
-```
-<br>
-fidelisation des participant-es
-<br>
-```{r plot fidel participants}
-plot_fidel_participant
+func_diag_radar_chang_niv()
 ```
 
 
 <br>
-Participer au spipoll plusieurs fois c'est améliorer les connaissances sur la biodiversité du site.
+La connaissance de la biodiversité locale s'améliore
 ```{r}
-richesse_taxo_cumul_insecte
+plot_richesse_cum_partie
 ```
 
 
 
-<br>
-Avenir : 
+la participaticipation au cours de la dernière saison
+```{r}
+plot_pheno_partic_saison
+```
 
-<br>
 
-# **Ce que vos observations indiquent sur les interactions entre plantes et pollinisateurs de votre site** 
-<br>
+
 
 
 # **Les pressions qui s'exercent sur votre site **

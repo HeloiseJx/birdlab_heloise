@@ -16,16 +16,27 @@
 ## coordonnées birdlab national ----
 # a l'échelle nationale, on applique différents filtre pour ne garder que les coordonnées 
 # correctes
+
+invisible(capture.output({france = read_sf(here::here("maps","metropole-version-simplifiee.geojson"), crs = 4326)}))
+
 coord_birdlab_national <- data_birdlab %>% 
   select(partie_id, longitude, latitude) %>% 
+  mutate(longitude = as.numeric(longitude), latitude = as.numeric(latitude)) %>% # certaines coordonnées sont nulles
   na.omit() %>% # on enlève les na
   distinct() %>%
   filter(longitude != 0 & latitude != 0) %>%
-  mutate(longitude = as.numeric(longitude), latitude = as.numeric(latitude)) %>% # certaines coordonnées sont nulles
-  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) # on passe tout en format sf, projection WGS 84
+  filter(
+    longitude != 0,
+    latitude != 0,
+    longitude >= -180,
+    longitude <= 180,
+    latitude >= -90,
+    latitude <= 90) %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)  %>% # on passe tout en format sf, projection WGS 84
+  st_join(france, left = F)
 
 
-france = read_sf(here::here("maps","metropole-version-simplifiee.geojson"), crs = 4326)
+
 
 # verification graphique
 # ggplot() +
@@ -36,7 +47,8 @@ france = read_sf(here::here("maps","metropole-version-simplifiee.geojson"), crs 
 
 # chargement d'autres emprises spatiales
 ## import des couches des intercommunes
-coord_epci <- st_read(here::here("maps/ADMIN-EXPRESS_3-2__SHP_WGS84G_FRA_2024-12-18/ADMIN-EXPRESS_3-2__SHP_WGS84G_FRA_2024-12-18/ADMIN-EXPRESS/1_DONNEES_LIVRAISON_2024-12-00243/ADE_3-2_SHP_WGS84G_FRA-ED2024-12-18/EPCI.shp"), quiet = TRUE) 
+invisible(capture.output({coord_epci <- st_read(here::here("maps/ADMIN-EXPRESS_3-2__SHP_WGS84G_FRA_2024-12-18/ADMIN-EXPRESS_3-2__SHP_WGS84G_FRA_2024-12-18/ADMIN-EXPRESS/1_DONNEES_LIVRAISON_2024-12-00243/ADE_3-2_SHP_WGS84G_FRA-ED2024-12-18/EPCI.shp"), quiet = TRUE) }))
+
 # epci <- epci[-c(26, 526),]
 coord_plaineco = coord_epci %>% filter(NOM == "Plaine Commune") 
 coord_terreenv = coord_epci %>% filter(NOM == "Paris Terres d'Envol") 
@@ -64,7 +76,7 @@ coord_birdlab_lyon = st_join(coord_birdlab_national, coord_metro_lyon, left = FA
 # locale qui nous intéresse
 # dt_birdlab_local = df de travail par la suite, non spatialisé
 # contient quand meme longitude et latitude
-dt_birdlab_local = as.data.frame(coord_birdlab_lyon) %>% # on repasse en df, on enlève la colonne spatialisée
+dt_birdlab_local = as.data.frame(coord_birdlab_plaineco) %>% # on repasse en df, on enlève la colonne spatialisée
   select(partie_id) %>% 
   left_join(data_birdlab) 
 
@@ -79,10 +91,15 @@ coord_birdlab_local <- dt_birdlab_local %>%
 # REFERENTIELS ##########################################################
 
 ## import des referentiels ----
-regions = st_read("maps/regions-version-simplifiee.geojson")
+invisible(capture.output({regions = st_read("maps/regions-version-simplifiee.geojson") }))
 
-biogeoregions = st_read("maps/region_biogeo_fr/region_biogeographique.shp") %>%
+
+
+invisible(capture.output({biogeoregions = st_read("maps/region_biogeo_fr/region_biogeographique.shp") %>%
   st_transform(crs = 4326) # passage du lambert 93 au WGS 84
+}))
+
+
 # certains sommets dupliqués : on corrige les erreurs
 invalid_index <- which(!st_is_valid(biogeoregions))
 biogeoregions[invalid_index, ] <- st_make_valid(biogeoregions[invalid_index, ])
@@ -94,10 +111,12 @@ biogeoregions[invalid_index, ] <- st_make_valid(biogeoregions[invalid_index, ])
 
 descri_greco = read.csv(here::here("maps/ser_l93/correspondance_greco_description.csv"), sep = ";")
 
-data_greco =  st_read("maps/ser_l93/ser_l93.shp")  %>%
+invisible(capture.output({data_greco =  st_read("maps/ser_l93/ser_l93.shp")  %>%
   st_transform(crs = 4326) %>% # passage du lambert 93 au WGS 84
   mutate(n_greco = str_sub(codeser, start = 1, end = 1)) %>%
-  na.omit()
+  na.omit() }))
+
+
 
 greco = data_greco %>%
   group_by(n_greco) %>%
