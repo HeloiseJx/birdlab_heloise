@@ -27,11 +27,13 @@ coord_birdlab_national <- data_birdlab %>%
   filter(longitude != 0 & latitude != 0) %>%
   filter(
     longitude != 0,
-    latitude != 0,
-    longitude >= -180,
-    longitude <= 180,
-    latitude >= -90,
-    latitude <= 90) %>%
+    latitude != 0
+    # ,
+    # longitude >= -180,
+    # longitude <= 180,
+    # latitude >= -90,
+    # latitude <= 90
+    ) %>%
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326)  %>% # on passe tout en format sf, projection WGS 84
   st_join(france, left = F)
 
@@ -52,14 +54,16 @@ invisible(capture.output({coord_epci <- st_read(here::here("maps/ADMIN-EXPRESS_3
 # epci <- epci[-c(26, 526),]
 coord_plaineco = coord_epci %>% filter(NOM == "Plaine Commune") 
 coord_terreenv = coord_epci %>% filter(NOM == "Paris Terres d'Envol") 
-coord_metro_lyon = coord_epci %>% filter(NOM == "Métropole de Lyon") 
+# coord_metro_lyon = coord_epci %>% filter(NOM == "Métropole de Lyon") 
+coord_gdparis = coord_epci %>% filter(NOM == "Métropole du Grand Paris") 
+
 
 ## differentes coordonnees birdlab locales ----
 # jointure avec les coordonnées des points birdlab
 # coordonnées birdlab pour les intercommunes selectionnées
 coord_birdlab_plaineco = st_join(coord_birdlab_national, coord_plaineco, left = FALSE)
 coord_birdlab_terreenv = st_join(coord_birdlab_national, coord_terreenv, left = FALSE)
-coord_birdlab_lyon = st_join(coord_birdlab_national, coord_metro_lyon, left = FALSE)
+# coord_birdlab_lyon = st_join(coord_birdlab_national, coord_metro_lyon, left = FALSE)
 
 
 # verification
@@ -139,86 +143,57 @@ rm(data_greco, descri_greco)
 # automatiquement au changement de localité pour les données sur lesquelles on decide de travailler
 
 ###ref_region ----
-
-# identification du referentiel regional administratif
-region_reference = coord_birdlab_local %>%
-  st_join(regions) %>%
-  as.data.frame() %>%
-  select(nom) %>%
-  unique() %>%
-  left_join(as.data.frame(regions)) %>%
-  st_as_sf()
-
-# donnees birdlab produites dans ce référentiel, filtre sur les données nationales
-ref_regionadmin = coord_birdlab_national %>%
-  st_join(region_reference) %>%
-  na.omit()
-
-rm(region_reference)
-  
-
-###ref_biogeoregion ----
-# identification biogeoregion de ref
-biogeoregion_reference = coord_birdlab_local %>%
-  st_join(biogeoregions) %>%
-  as.data.frame() %>%
-  select(CODE, N_DOMAINE) %>%
-  unique() %>%
-  left_join(as.data.frame(biogeoregions)) %>%
-  st_as_sf()
-
-# donnees birdlab produites dans ce référentiel, filtre sur les données nationales
-ref_biogeoregion = coord_birdlab_national %>%
-  st_join(biogeoregion_reference) %>%
-  na.omit()
-
-rm(biogeoregion_reference)
-
-
-###ref_greco ----
-# identification biogeoregion de ref
-greco_reference = coord_birdlab_local %>%
-  st_join(greco) %>%
-  as.data.frame() %>%
-  select(n_greco, description) %>%
-  unique() %>%
-  left_join(as.data.frame(greco)) %>%
-  st_as_sf()
-
-# donnees birdlab produites dans ce référentiel, filtre sur les données nationales
-ref_greco = coord_birdlab_national %>%
-  st_join(greco_reference) %>%
-  na.omit()
-
-rm(greco_reference)
-
-
-
-
-# PAYSAGE ######################################################################
-
-## CLC ----
-#  # CLC_12 : CLC niveau 1 et 2 
-# CLC_12 = st_read(here::here("maps/CLC12_FR_RGF_SHP/CLC12_FR_RGF_SHP/CLC12_FR_RGF.shp")) %>%
-#   st_transform(crs = 4326)
-
 # 
-# # recuperation polygone parc de la Tete d'Or Lyon a partir de la couche CLC ----
-# CLC_site = CLC_12 %>% filter(ID == "FR-34337") 
+# # identification du referentiel regional administratif
+# region_reference = coord_birdlab_local %>%
+#   st_join(regions) %>%
+#   as.data.frame() %>%
+#   select(nom) %>%
+#   unique() %>%
+#   left_join(as.data.frame(regions)) %>%
+#   st_as_sf()
 # 
-# coord_birdlab_site <- coord_birdlab_national %>%
-#   st_join(CLC_site) %>%
-#   filter(!is.na(CODE_12)) %>%
-#   select(session_id, geometry)
+# # donnees birdlab produites dans ce référentiel, filtre sur les données nationales
+# ref_regionadmin = coord_birdlab_national %>%
+#   st_join(region_reference) %>%
+#   na.omit()
 # 
-# dt_birdlab_site =  as.data.frame(coord_birdlab_site) %>% select(session_id) %>% left_join(dt_birdlab_total)
+# rm(region_reference)
+#   
 # 
-# # jointure couche métro lyon et habitats CLC = habitats lyon
-# CLC_lyon = CLC_12 %>% st_join(metro_lyon, left = F) 
+# ###ref_biogeoregion ----
+# # identification biogeoregion de ref
+# biogeoregion_reference = coord_birdlab_local %>%
+#   st_join(biogeoregions) %>%
+#   as.data.frame() %>%
+#   select(CODE, N_DOMAINE) %>%
+#   unique() %>%
+#   left_join(as.data.frame(biogeoregions)) %>%
+#   st_as_sf()
 # 
-# # jointure couche régions et habitats CLC = habitats regionaux ou nationaux
-# CLC_regions = CLC_12 %>% st_join(regions, left = F)
-# CLC_aura = CLC_regions %>% filter(nom == "Auvergne-Rhône-Alpes")
+# # donnees birdlab produites dans ce référentiel, filtre sur les données nationales
+# ref_biogeoregion = coord_birdlab_national %>%
+#   st_join(biogeoregion_reference) %>%
+#   na.omit()
 # 
-# dt_birdlab_aura =  as.data.frame(coord_birdlab_aura) %>% select(session_id) %>% left_join(dt_birdlab_total)
-
+# rm(biogeoregion_reference)
+# 
+# 
+# ###ref_greco ----
+# # identification biogeoregion de ref
+# greco_reference = coord_birdlab_local %>%
+#   st_join(greco) %>%
+#   as.data.frame() %>%
+#   select(n_greco, description) %>%
+#   unique() %>%
+#   left_join(as.data.frame(greco)) %>%
+#   st_as_sf()
+# 
+# # donnees birdlab produites dans ce référentiel, filtre sur les données nationales
+# ref_greco = coord_birdlab_national %>%
+#   st_join(greco_reference) %>%
+#   na.omit()
+# 
+# rm(greco_reference)
+# 
+# 

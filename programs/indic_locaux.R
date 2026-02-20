@@ -28,11 +28,7 @@
 
 
 
-# choix de l'échelle de référence : à modifier ici une fois
-dt_ref = ref_regionadmin %>%
-  left_join(data_birdlab) %>% 
-  as.data.frame() %>% 
-  select(-geometry, - nom, -code)
+
   
 
 # nombre total de parties jouées 
@@ -286,7 +282,7 @@ func_duree_mangeoire = function(dt_birdlab, nb_occu_min, titre = NULL) {
     theme_minimal() +
     theme(axis.text.x = element_text(angle = 30, hjust = 1)) +
     labs(x = "espèces",
-         y = "durée moyenne à la mangeoire",
+         y = "durée moyenne à la mangeoire (s)",
          title = titre)
   
   
@@ -452,6 +448,161 @@ func_modularite_interaction = function(){
 # phenologie des especes au cours de la saison --> pas trop faisable
 
 
+# activité ----
+df_activite_local = dt_birdlab_local %>%
+  group_by(partie_id) %>%
+  mutate(nb_contact = n_distinct(numero_individu)) %>% 
+  ungroup() %>%
+  group_by(partie_id, espece) %>%
+  mutate(nb_contact_sp_partie = n_distinct(numero_individu)) %>% 
+  ungroup() %>%
+  select(partie_id, espece, nb_contact, nb_contact_sp_partie, mangeoires_type) %>% 
+  unique() %>% 
+  mutate(echelle = "local")
+
+df_activite_ref = dt_ref %>%
+  group_by(partie_id) %>%
+  mutate(nb_contact = n_distinct(numero_individu)) %>% 
+  ungroup() %>%
+  group_by(partie_id, espece) %>%
+  mutate(nb_contact_sp_partie = n_distinct(numero_individu)) %>% 
+  ungroup() %>%
+  select(partie_id, espece, nb_contact, nb_contact_sp_partie, mangeoires_type) %>% 
+  unique()%>% 
+  mutate(echelle = "ref")
+
+
+# ACTIVITE PAR PARTIE
+# val numeriques
+acti_partie_local = df_activite_local %>%
+  select(partie_id, nb_contact) %>%
+  unique() %>%
+  mutate(moy = mean(nb_contact)) %>%
+  pull(moy) %>%
+  unique() %>%
+  round()
+
+acti_partie_ref = df_activite_ref %>%
+  select(partie_id, nb_contact) %>%
+  unique() %>%
+  mutate(moy = mean(nb_contact)) %>%
+  pull(moy) %>%
+  unique() %>%
+  round()
+
+
+# graphe
+dt_nb_sess = df_activite_local %>%
+  bind_rows(df_activite_ref) %>%
+  select(-espece, -mangeoires_type, -nb_contact_sp_partie) %>%
+  unique() %>%
+  add_count(echelle, name = "nb_partie")
+
+plot_activite_partie = ggplot(dt_nb_sess, aes(x = echelle, fill = echelle)) +
+  geom_boxplot(aes(y = nb_contact), width = 0.1)+
+  geom_text(aes(y = 0, label = paste0(nb_partie, " partie(s)")), size = 3)  +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  ylab("nombre d'individus observés sur la mangeoire par partie")
+
+
+
+# PAR TYPE DE MANGEOIRES
+# nb indiv pour mangeoire suspendue, données locales
+acti_partie_loc_susp = df_activite_local %>%
+  filter(mangeoires_type =="suspendu") %>%
+  select(partie_id, nb_contact) %>%
+  unique() %>%
+  mutate(moy = mean(nb_contact)) %>%
+  pull(moy) %>%
+  unique() %>%
+  round()
+
+# nb indiv pour mangeoire plateau, données locales
+acti_partie_loc_plato = df_activite_local %>%
+  filter(mangeoires_type =="plateau") %>%
+  select(partie_id, nb_contact) %>%
+  unique() %>%
+  mutate(moy = mean(nb_contact)) %>%
+  pull(moy) %>%
+  unique() %>%
+  round()
+
+dt1 = df_activite_local %>%
+  select(partie_id, mangeoires_type) %>% 
+  unique() %>%
+  group_by(mangeoires_type) %>%
+  mutate(nb_partie = n_distinct(partie_id)) %>%
+  ungroup()
+
+plot_acti_loc_comparaison_mangeoire = df_activite_local %>%
+  select(partie_id, nb_contact, mangeoires_type) %>%
+  unique() %>%
+  left_join(dt1) %>%
+  na.omit() %>%
+  ggplot(aes(x = mangeoires_type, y = nb_contact, fill = mangeoires_type)) +
+  geom_text(aes(y = 0, label = paste0(nb_partie, " partie(s)")), size = 3)  +
+  geom_boxplot(width = 0.1) +
+  theme_minimal() +
+  geom_jitter() +
+  theme(legend.position = "none") +
+  ylab("nombre d'individus observés")+
+  xlab("type de mangeoire")
+
+# nb indiv pour mangeoire suspendue, données de ref
+acti_partie_ref_susp = df_activite_ref %>%
+  filter(mangeoires_type =="suspendu") %>%
+  select(partie_id, nb_contact) %>%
+  unique() %>%
+  mutate(moy = mean(nb_contact)) %>%
+  pull(moy) %>%
+  unique() %>%
+  round()
+
+# nb indiv pour mangeoire plateau, données de ref
+acti_partie_ref_plato = df_activite_ref %>%
+  filter(mangeoires_type =="plateau") %>%
+  select(partie_id, nb_contact) %>%
+  unique() %>%
+  mutate(moy = mean(nb_contact)) %>%
+  pull(moy) %>%
+  unique() %>%
+  round()
+
+# 
+# plot_acti_ref_comparaison_mangeoire = df_activite_ref %>%
+#   select(partie_id, nb_contact, mangeoires_type) %>%
+#   unique() %>%
+#   ggplot(aes(x = mangeoires_type, y = nb_contact)) +
+#   geom_boxplot(width = 0.4) +
+#   theme_minimal()
+
+
+
+
+# PAR ESPECE
+# faire un ordre pour le graphe
+dt_tri = df_activite_local %>%
+  filter(echelle == "local") %>%
+  group_by(espece) %>%
+  mutate(tri =  median(nb_contact_sp_partie)) %>%
+  select(espece, tri) %>%
+  unique()
+
+plot_sp_acti = 
+  df_activite_local %>%
+  bind_rows(df_activite_ref) %>%
+  left_join(dt_tri) %>%
+  filter(espece %in% unique(df_activite_local$espece)) %>%
+  filter(espece != "Espèce inconnue") %>%
+  select(-nb_contact) %>%
+  ggplot(aes(x = reorder(espece, tri), y = nb_contact_sp_partie, fill = echelle)) +
+  geom_boxplot() +
+  coord_flip() +
+  theme_minimal() +
+  ylab("nombre d'individus de l'espèce observés en une partie") +
+  xlab("espèces") 
+  
 
 
 
@@ -804,7 +955,7 @@ df_mangeoire = dt_birdlab_local %>%
 carte_collections <- leaflet(df_mangeoire) %>% 
   addTiles() %>% 
   addPolygons(data = coord_plaineco, fillOpacity = 0) %>% # popup ne fonctionne pas
-  addCircleMarkers(radius = ~nb_partie, 
+  addCircleMarkers(radius = 10, 
                    color = "orange", 
                    fillOpacity = 1, 
                    stroke = F, 

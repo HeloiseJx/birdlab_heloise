@@ -4,6 +4,7 @@
 .Ruserdata
 /data
 /maps
+/image
 *.Rmd
 *.qmd
 *.html

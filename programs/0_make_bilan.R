@@ -2,8 +2,8 @@
 
 
 source("programs/library.R")
-
-data_birdlab = readRDS("data/data_birdlab_2025-04-30.rds") %>%
+# readRDS("data/data_birdlab_2025-04-30.rds")
+data_birdlab = readRDS("data/dt_birdlab_tot_2025_05_19.rds") %>%
   mutate(year = year(date), 
          month = month(date)) %>%
   # suppression de la mention mâle ou femelle pour ne garder que les espèces
@@ -60,12 +60,6 @@ data_birdlab = func_groupe_saison(data_birdlab)
 
 
 
-
-source(here::here("programs", "filtre_spatial.R"))
-
-
-
-source(here::here("programs", "indic_locaux.R"))
 
 
 # source(here::here("programs", "render.R"))
