@@ -1,0 +1,593 @@
+---
+title: "QMD_restit_V2_solideo_Birdlab"
+author: "Héloïse Jeux - Vigie-Nature"
+format:
+  html:
+    toc: true
+    toc-location: left
+    sidebar: true
+    toc-title: "Sommaire"
+    toc-depth: 2
+    embed-resources: true
+execute:
+  echo: false
+  message : false
+  warning : false
+  error : false
+editor: visual
+---
+
+```{r}
+source("programs/0_make_bilan.R")
+source("programs/filtre_spatial.R")
+```
+
+```{r}
+# calcul du référentiel utilisé
+### paysage local pour un buffer de 1000m  ----
+dt_protoc_oso = readRDS("data/dt_birdlab_oso_calcul_1000.rds") %>%
+  rename(partie_id = session_id)
+
+# adaptation au projet des deux scripts ci-dessous sans changer le nom des variables
+# pas très élégant mais codes de bric et de broc un peu...
+dt_birdlab_tot = data_birdlab
+dt_birdlab = dt_protoc_oso
+
+### fonction calcul referentiel ----
+source("programs/fonctions_stat.R")
+source("programs/calcul_ref_birdlab.R") #--> renvoit df_ref_choisi_VA, df_ref_choisi_VM
+# on obtient un df du type : session_id | referentiel_choisi | ref_lies
+# df_ref_choisi
+
+# Choix d'un référentiel : On ne conserve que l'information PAYSAGE LOCAL, comme des indicateurs sont produits sur le type de mangeoire utilisé et le niveau des participants. différentes mangeoires sont utilisées sur le site et le niveau des participant est hétérogène, donc il est impossible de produire à l'échelle du site une restitution avec un référentiel regroupant ces 2 critères.
+```
+
+```{r}
+# referentiel des sessions locales 
+dt_ref_sessions_locales = df_ref_choisi %>% 
+  filter(partie_id %in% unique(dt_birdlab_local$partie_id))
+# --> on conserve le critère CS
+
+
+# choix de l'échelle de référence : à modifier ici une fois
+dt_ref = df_ref_choisi %>%
+  filter(CS == unique(dt_ref_sessions_locales$CS)) %>% # je récupère les sessions "urbaines"
+  select(partie_id, CS) %>%
+  left_join(data_birdlab) %>%
+  left_join(coord_birdlab_national) %>%
+  st_as_sf() %>%
+  st_join(coord_gdparis) %>% # je récupère les sessions "urbaines" dans la métropole du grand paris
+  filter(!is.na(NOM)) %>%
+  as.data.frame() %>%
+  select(-geometry) %>%
+  select(-ID, -NOM, -CODE_SIREN, -NATURE)
+
+source("programs/indic_locaux.R")
+
+  
+```
+
+\*Référentiel choisi : Sites urbains de la Métropole du Grand Paris Nombre de sessions dans le référentiel : `r n_distinct(dt_ref$partie_id)` sessions
+
+*Données locales : Plaine Commune*
+
+## Carte simplifiée des collections
+
+```{r carto_simple}
+carte_collections
+```
+
+# **EN BREF...** {.tabset .tabset-pills}
+
+## ...la biodiversité que vous avez observée
+
+*filtre : colonne espece filtre sur "Espèce inconnue"*
+
+Le protocole Birdlab concerne une liste de 30 espèces d'oiseaux communément observés dans votre jardin en hiver.
+
+Au total, `r nb_sp_tot_local` espèces d'oiseaux ont été observées sur votre site sur `r nb_mangeoire_local` mangeoires. Au total sur les sites urbains de la métropole du Grand Paris, `r nb_sp_tot_ref` espèces ont été observées.
+
+Nombre total d'espèces observées sur votre site parmi la liste des 30 espèces lors de la dernière saison :
+
+```{r }
+if (der_saison %in% dt_birdlab_local$saison) {
+  jauge_dernière_saison
+} else {
+  print("pas de participation à la dernière saison")
+}
+
+```
+
+Nombre total d'espèces observées sur votre site, en cumulant les données de toutes les parties parmi la liste des 30 espèces :
+
+```{r }
+jauge_total
+```
+
+En moyenne sur les mangeoires de votre site, vous pouvez espérer voir environ `r round(nb_moy_esp_partie_local)` espèces. Dans le référentiel, c'est en moyenne `r round(nb_moy_esp_partie_ref)` espèces qui sont observées par parties.
+
+**Fréquences d'observation des espèces :**
+
+Ce graphe décrit les probabilités que vous avez d'observer les espèces sur votre site.
+
+```{r }
+if (n_distinct(dt_birdlab_local$partie_id) >= 1) {
+  func_plot_freq_combi()
+} else {
+  print("absence de donnée")
+}
+
+
+```
+
+```{r }
+# func_test_reseau_asso()
+```
+
+**Le temps moyen passé à la mangeoire par espèce :**
+
+```{r}
+
+df_duree_mangeoire_local = func_duree_mangeoire(dt_birdlab_local, nb_occu_min = 10, titre = "LOCAL")
+# 
+# df_duree_mangeoire_ref = func_duree_mangeoire(dt_ref, nb_occu_min = 10, titre = "REF")
+#   
+# df_duree_mangeoire_nation = func_duree_mangeoire(data_birdlab, nb_occu_min = 10, titre = "NATIONAL")
+# 
+print(df_duree_mangeoire_local)
+# print(df_duree_mangeoire_ref)
+# print(df_duree_mangeoire_nation)
+
+
+
+# func_duree_mangeoire_combi(dt_birdlab_local, dt_ref %>% select(-CS), nb_occu_min = 10, titre = "LOCAL vs REF")
+
+```
+
+**L'activité sur votre mangeoire**
+
+L'activité sur une mangeoire peut se mesurer à partir des données Birdlab en considérant le nombre d'observations d'oiseaux par partie.
+
+-   Activité moyenne par mangeoire de la structure
+
+nombre moyen d'individus par parties en local : `r acti_partie_local`
+
+nombre moyen d'individus par parties dans la référence : `r acti_partie_ref` %
+
+gamme de variation de ces activités en local et dans la référence :
+
+```{r}
+plot_activite_partie
+```
+
+-   Activité des mangeoires de la structure selon le type de mangeoire
+
+```{r}
+plot_acti_loc_comparaison_mangeoire
+```
+
+-   activité moyenne par espèce
+
+```{r}
+plot_sp_acti
+```
+
+## ...la participation sur votre site
+
+*filtre : pas de filtre*
+
+-   Nombre de parties jouées localement : `r ntot_partie`
+
+-   Nombre de mangeoires sur le site : `r nb_mangeoire_local`, de type : `r type_mangeoire`.
+
+-   Nombre total de participants sur le site : `r ntot_participant`
+
+-   Poids des données dans le référentiel : `r poids_ds_ref`%
+
+Evolution du nombre de participants sur votre site :
+
+```{r}
+plot_evol_participant
+```
+
+```{r}
+plot_evol_participation
+```
+
+En moyenne sur votre site, les participants participent `r round(participant_moy)` fois. Dans le référentiel, en moyenne, les participants réalisent `r round(participant_moy_ref)` parties.
+
+**Activité des participant.e.s**
+
+```{r}
+plot_activite
+```
+
+**Répartition des participants selon leur niveau :**
+
+```{r}
+plot_niv_participant
+```
+
+### Pourquoi s'impliquer sur le long terme dans le programme :
+
+La connaissance de la biodiversité locale s'améliore
+
+richesse cumulée locale :
+
+```{r}
+# plot_richesse_cum_local
+func_richesse_cumul(dt_birdlab_local)
+
+```
+
+```{r}
+# Richesse cumulée pour les données du référentiel : --> ne fait pas vraimnt sens à comparer avec les données locales
+# plot_richesse_cum_ref 
+# func_richesse_cumul(dt_ref)
+```
+
+La participaticipation au cours de la dernière saison
+
+```{r}
+plot_pheno_partic_saison
+```
+
+
+
+# REFERENTIELS 
+
+Combinaison de filtres : 
+
+Niveau des participants * Type de mangeoire * Taux urbanisation
+
+Niveau des participants = Type de mangeoire > Taux urbanisation
+
+En considérant le taux d'urbanisation sur le village des médias (60%) et le village des athlètes (80%).
+
+
+**taille des référentiels**
+
+```{r}
+#' Title
+#'fonction qui permet de calculer pour les sessions d'un site les taille des différents référentiels associés à ces sessions = référentiels du site
+#'
+#' @param dt_referentiel 
+#' @param titre 
+#' @param parties_locales   array de parties locales
+#'
+#' @returns 
+#' @export
+#'
+#' @examples
+func_graphe_taille_ref_site = function(dt_referentiel, titre = NULL, parties_locales) {
+  
+  sel_ref_locaux = dt_referentiel %>%
+    filter(partie_id %in% parties_locales) %>%
+    pull(ref_choisi) %>%
+    unique()
+  
+   p = 
+    dt_referentiel %>%
+    select(ref_lies, n_ref_lies) %>%
+    filter(ref_lies %in% sel_ref_locaux) %>%
+    unique() %>%
+     # on filtre les referentiels qui ne rentrent pas dans les range de taux d'urbanisation
+     filter(str_detect(ref_lies, "U")) %>%
+  ggplot(aes(x = reorder(ref_lies, n_ref_lies), y = n_ref_lies)) +
+  geom_bar(stat = "identity", width = 0.5) +
+  theme_minimal() +
+  labs(title = paste0("Taille des référentiels - ", titre), x = "référentiels", y = "nombre de parties") +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+  # coord_flip()
+  
+  
+  
+  
+  
+  return(p)
+}
+
+ plot_tailleref_VA_donnees_reelles = func_graphe_taille_ref_site(dt_referentiel = df_ref_choisi_VA, titre = "VA", parties_locales = unique(coord_birdlab_plaineco$partie_id))
+ plot_tailleref_VM_donnees_reelles = func_graphe_taille_ref_site(df_ref_choisi_VM, titre = "VM", parties_locales = unique(coord_birdlab_terreenv$partie_id))
+
+
+```
+
+
+```{r}
+
+#' Title
+#' plot qui trace un graphe de tous les référentiels possibles à partir des df de calcul des référentiels birdlab en connaissant les taux d'urbanisation sur le village des athlètes et des médias
+#'
+#' @param dt_referentiel 
+#' @param titre 
+#'
+#' @returns
+#' @export
+#'
+#' @examples
+func_graphe_taille_ref_general = function(dt_referentiel, titre = NULL) {
+  
+  p = dt_referentiel %>%
+    select(ref_choisi, n_ref_choisi) %>%
+    unique() %>%
+  ggplot(aes(x = reorder(ref_choisi, n_ref_choisi), y = n_ref_choisi)) +
+  geom_bar(stat = "identity", width = 0.5) +
+  theme_minimal() +
+  labs(title = paste0("Taille des référentiels - ", titre), x = "référentiels", y = "nombre de parties") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  # coord_flip()
+  
+
+  
+  return(p)
+  
+}
+
+plot_tailleref_VA = func_graphe_taille_ref_general(dt_referentiel = df_ref_choisi_VA, titre = "VA")
+plot_tailleref_VM = func_graphe_taille_ref_general(df_ref_choisi_VM, titre = "VM")
+
+```
+
+
+
+
+**Nombre de sessions concernées**
+
+```{r}
+
+func_nb_sessions_concernees_ref = function(dt_referentiel, titre = NULL) {
+  
+  p = dt_referentiel %>%
+  select(ref_choisi, partie_id) %>%
+  unique() %>%
+  group_by(ref_choisi) %>%
+  reframe(nb_sessions_concernees = n_distinct(partie_id)) %>%
+  ggplot(aes(x = reorder(ref_choisi, nb_sessions_concernees), y = nb_sessions_concernees)) +
+  geom_bar(stat = "identity", width = 0.5) +
+  theme_minimal() +
+  labs(title = paste0("Nombre de parties concernées par les référentiels - ", titre), x = "référentiels", y = "nombre de parties") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  # coord_flip()
+  
+  return(p)
+}
+
+plot_sess_concer_VA = func_nb_sessions_concernees_ref(df_ref_choisi_VA, titre = "VA")
+plot_sess_concer_VM = func_nb_sessions_concernees_ref(df_ref_choisi_VM, titre = "VM")
+
+```
+
+
+**Répartition par finesse de référentiels**
+
+```{r}
+# avec toutes les données des référentiels potentiels de VA et VM
+data = df_ref_choisi_VA %>%
+  select(partie_id, finesse_ref_choisi) %>%
+  unique() %>%
+  mutate(finesse_ref_choisi = as.numeric(finesse_ref_choisi)) %>%
+  group_by(finesse_ref_choisi) %>%
+  reframe(nb_partie = n_distinct(partie_id)) %>%
+  ungroup() %>%
+  rename(category = finesse_ref_choisi) %>%
+  mutate(count = round(100*nb_partie / sum(nb_partie), 1))
+
+ 
+# Compute percentages
+data$fraction <- data$count / sum(data$count)
+
+# Compute the cumulative percentages (top of each rectangle)
+data$ymax <- cumsum(data$fraction)
+
+# Compute the bottom of each rectangle
+data$ymin <- c(0, head(data$ymax, n=-1))
+
+# Compute label position
+data$labelPosition <- (data$ymax + data$ymin) / 2
+
+# Compute a good label
+data$label <- paste0("finesse = ", data$category,"\n", data$count, " %")
+
+# Make the plot
+donut = ggplot(data, aes(ymax=ymax, ymin=ymin, xmax=4, xmin=3, fill=category)) +
+  geom_rect() +
+  geom_label( x=4.2, aes(y=labelPosition, label=label), size=2.5, color = "orange") +
+  coord_polar(theta="y") +
+  xlim(c(2, 4)) +
+  theme_void() +
+  theme(legend.position = "none")
+
+
+  
+  
+
+```
+
+
+
+
+
+### Exemple d'application : nombre moyen de points de contacts par partie 
+
+Exemple en considérant les sites de Plaine Commune, calcul du nombre de points de contact moyen par mangeoire et dans les référentiels associés aux parties.
+
+
+```{r}
+# sans agréger par référentiel
+# calcul de l'activité par mangeoire
+
+func_expl_indic_contact = function(coord_locales, df_ref , titre = NULL) {
+  
+  parties_locales = coord_locales %>%
+  pull(partie_id) %>%
+  unique()
+
+
+  sel_ref_locaux = df_ref %>%
+    filter(partie_id %in% parties_locales) %>%
+    pull(ref_choisi) %>%
+    unique()
+
+df_activite_ref = df_ref %>%
+  filter(ref_lies %in% sel_ref_locaux) %>%
+  unique() %>%
+  left_join(dt_birdlab_tot) %>%
+  group_by(partie_id) %>%
+  mutate(nb_contact = n_distinct(numero_individu)) %>% 
+  ungroup() %>%
+  group_by(partie_id, espece) %>%
+  mutate(nb_contact_sp_partie = n_distinct(numero_individu)) %>% 
+  ungroup() %>%
+  select(partie_id, espece, nb_contact, nb_contact_sp_partie) %>% 
+  unique() %>% 
+  mutate(echelle = "ref")
+
+
+df_activite_local = dt_birdlab_tot %>% 
+  filter(partie_id %in% parties_locales) %>%
+  unique() %>%
+  group_by(partie_id) %>%
+  mutate(nb_contact = n_distinct(numero_individu)) %>% 
+  ungroup() %>%
+  group_by(partie_id, espece) %>%
+  mutate(nb_contact_sp_partie = n_distinct(numero_individu)) %>% 
+  ungroup() %>%
+  select(partie_id, espece, nb_contact, nb_contact_sp_partie) %>% 
+  unique() %>% 
+  mutate(echelle = "local")
+
+
+plot = 
+  df_activite_local %>%
+  bind_rows(df_activite_ref) %>%
+  select(echelle, partie_id, nb_contact) %>%
+  ggplot(aes(x = echelle, y = nb_contact, fill = echelle)) +
+  geom_boxplot() +
+    theme_minimal() +
+  labs(y = "Nombre de points de contact total par partie", 
+       y = "échelle", title = titre)
+
+  return(plot)
+  
+  
+}
+
+# 
+# plot_VA = func_expl_indic_contact(coord_locales = coord_birdlab_plaineco, df_ref = df_ref_choisi_VA, titre = "VA") 
+# plot_VM = func_expl_indic_contact(coord_locales = coord_birdlab_terreenv, df_ref = df_ref_choisi_VM, titre = "VM") 
+
+
+```
+
+En calculant une médiane par référentiel
+```{r}
+# en calculant la moyenne des valeurs par référentiel
+# calcul de l'activité par mangeoire
+
+func_expl_indic_contact = function(coord_locales, df_ref, titre = NULL) {
+  
+  parties_locales = coord_locales %>%
+  pull(partie_id) %>%
+  unique()
+
+sel_ref_locaux = df_ref %>%
+    filter(partie_id %in% parties_locales) %>%
+    pull(ref_choisi) %>%
+    unique()
+
+df_activite_ref = df_ref %>%
+  filter(ref_lies %in% sel_ref_locaux) %>%
+  unique() %>%
+  left_join(dt_birdlab_tot) %>%
+  group_by(partie_id) %>%
+  mutate(nb_contact = n_distinct(numero_individu)) %>%
+  ungroup() %>%
+  group_by(ref_lies) %>%
+  mutate(nb_contact_median_partie = quantile(nb_contact, 0.5)) %>%
+  ungroup() %>%
+  select(ref_choisi, nb_contact_median_partie) %>%
+  unique() %>%
+  mutate(echelle = "ref")
+
+
+df_activite_local = dt_birdlab_tot %>%
+  filter(partie_id %in% parties_locales) %>%
+  unique() %>%
+  group_by(partie_id) %>%
+  reframe(nb_contact = n_distinct(numero_individu)) %>%
+  ungroup() %>%
+  left_join(df_ref) %>%
+  select(partie_id, nb_contact, ref_choisi) %>%
+  unique() %>%
+  group_by(ref_choisi) %>%
+  mutate(nb_contact_median_partie = quantile(nb_contact, 0.5)) %>%
+  ungroup() %>%
+  select(ref_choisi, nb_contact_median_partie) %>%
+  unique() %>%
+  mutate(echelle = "local")
+
+
+plot =
+  df_activite_local %>%
+  bind_rows(df_activite_ref) %>%
+  ggplot(aes(x = echelle, y = nb_contact_median_partie, fill = echelle)) +
+  geom_boxplot(width = 0.5) +
+    theme_minimal() +
+    labs(y = "Nombre de points de contact median \n sessions regroupées par ref", 
+       y = "échelle", 
+       title = titre)
+
+
+return(plot)
+  
+}
+
+
+plot_expl_sessionsagregees_VA = func_expl_indic_contact(coord_locales = coord_birdlab_plaineco, df_ref = df_ref_choisi_VA , titre = "VA")
+plot_expl_sessionsagregees_VM = func_expl_indic_contact(coord_locales = coord_birdlab_terreenv, df_ref = df_ref_choisi_VM , titre = "VM")
+
+
+   
+```
+### analyse de sensibilité : taux d'urbanisation
+
+```{r}
+
+a = df_ref_choisi_VA %>%
+  mutate(urba = str_extract(ref_lies, "U\\d+")) %>%
+  filter(!is.na(urba)) %>%
+  select(partie_id, urba) %>%
+  unique() %>%
+  
+  # calcul nb de contact
+  left_join(dt_birdlab_tot) %>%
+  group_by(partie_id) %>%
+  mutate(nb_contact = n_distinct(numero_individu)) %>%
+  ungroup() 
+
+ggplot(a, aes(x = urba, y = nb_contact)) +
+  geom_boxplot()
+
+a = df_ref_choisi_VM %>%
+  mutate(urba = str_extract(ref_lies, "U\\d+")) %>%
+  filter(!is.na(urba)) %>%
+  select(partie_id, urba) %>%
+  unique() %>%
+  
+  # calcul nb de contact
+  left_join(dt_birdlab_tot) %>%
+  group_by(partie_id) %>%
+  mutate(nb_contact = n_distinct(numero_individu)) %>%
+  ungroup() 
+
+ggplot(a, aes(x = urba, y = nb_contact)) +
+  geom_boxplot()
+
+
+
+
+```
+
+
+

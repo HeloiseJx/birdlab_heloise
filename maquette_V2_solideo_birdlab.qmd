@@ -1,0 +1,1001 @@
+---
+title: "V2_maquette_PlaineNature"
+editor: visual
+format:
+  html:
+    toc: true
+    toc-location: left
+    sidebar: true
+    toc-title: "Sommaire"
+    toc-depth: 2
+    embed-resources: true
+execute:
+  echo: true
+  message : false
+  warning : false
+  error : false
+---
+
+# IMPORT DE DONNEES & FORMATAGE
+
+## librairies R
+
+```{r librairies}
+# R 4.4.2
+library(cowplot) # 1.1.3
+suppressWarnings(suppressMessages(library(dplyr))) # 1.1.4
+suppressWarnings(suppressMessages(library(flexdashboard))) # 0.6.2
+library(fmsb) # 0.7.6
+library(ggplot2) # 3.5.1
+suppressWarnings(suppressMessages(library(here))) # 1.0.1
+suppressWarnings(suppressMessages(library(httr))) # 1.4.7
+library(jsonlite) # 1.8.9
+suppressWarnings(suppressMessages(library(plotly))) # 4.10.4
+suppressWarnings(suppressMessages(library(RMySQL))) # 0.10.29
+library(stringr) # 1.5.1
+library(tidyr)
+library(lubridate)
+library(sf)
+library(vegan)
+library(GGally)
+```
+
+## données autres
+
+### Intercommunalités
+
+```{r couche publique des intercommunalites BD ADMIN EXPRESS}
+# couche ADMIN EXPRESS - polygones 
+invisible(capture.output({coord_epci <- st_read(here::here("maps/ADMIN-EXPRESS_3-2__SHP_WGS84G_FRA_2024-12-18/ADMIN-EXPRESS_3-2__SHP_WGS84G_FRA_2024-12-18/ADMIN-EXPRESS/1_DONNEES_LIVRAISON_2024-12-00243/ADE_3-2_SHP_WGS84G_FRA-ED2024-12-18/EPCI.shp"), quiet = TRUE) }))
+
+# recuperation des coordonnees des intercommunalites d'interet
+coord_plaineco = coord_epci %>% filter(NOM == "Plaine Commune") # emprise de Plaine Commune
+coord_grand_paris = coord_epci %>% filter(NOM == "Métropole du Grand Paris") # emprise de la MGP
+```
+
+### Biogeoregions
+
+```{r couche publique des biogeoregions}
+# biogeoregions
+invisible(capture.output({biogeoregions = st_read("maps/region_biogeo_fr/region_biogeographique.shp") %>%
+  st_transform(crs = 4326) # passage du lambert 93 au WGS 84
+}))
+
+# certains sommets dupliqués : on corrige les erreurs
+invalid_index <- which(!st_is_valid(biogeoregions))
+biogeoregions[invalid_index, ] <- st_make_valid(biogeoregions[invalid_index, ])
+```
+
+### France Metropole
+
+```{r metropole}
+
+invisible(capture.output({france = read_sf(here::here("maps","metropole-version-simplifiee.geojson"), crs = 4326)}))
+
+```
+
+## Import des données birdlab
+
+### df_birdlab_brut = données brutes
+
+```{r import des donnees birdlab de la BD MOSAIC}
+df_birdlab_brut = readRDS("data/dt_birdlab_tot_2025_05_19.rds") 
+
+```
+
+### coord_birdlab_national = df birdlab spatialise
+
+On récupère un point par site birdlab et on produit df_birdlab_spatial, une table avec les coordonnées des sessions birdlab.
+
+```{r df birdlab spatialise}
+## coordonnées birdlab national ----
+# a l'échelle nationale, on applique différents filtre pour ne garder que les coordonnées 
+# correctes
+
+
+coord_birdlab_national <- df_birdlab_brut %>% 
+  select(partie_id, longitude, latitude) %>% 
+  mutate(longitude = as.numeric(longitude), latitude = as.numeric(latitude)) %>% # certaines coordonnées sont nulles
+  na.omit() %>% # on enlève les na
+  distinct() %>%
+  # filter(longitude != 0 & latitude != 0,
+  #   longitude >= -180,
+  #   longitude <= 180,
+  #   latitude >= -90,
+  #   latitude <= 90
+  #   ) %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)  %>% # on passe tout en format sf, projection WGS 84
+  st_join(france, left = F)
+
+
+```
+
+### df_birdlab = filtre et formatage sur les donnees brutes
+
+```{r modification de la BD birdlab_ajout et modification colonne }
+temp_birdlab = df_birdlab_brut %>%
+  # creation colonne annee & mois a partir de la colonne `date`
+  mutate(year = year(date), 
+         month = month(date)) %>%
+  
+  # suppression de la mention mâle ou femelle dans la colonne `espece` pour ne garder que les espèces
+  mutate(espece = str_remove_all(espece, "(?i)\\s*\\(?\\b(mâle|femelle)\\b\\)?") %>% 
+           str_squish()) %>% # enleve les espaces (blank) restants
+  
+  # on enlève les données hors france metro
+  filter(partie_id %in% unique(coord_birdlab_national$partie_id))
+
+
+
+```
+
+On filtre les oiseaux qui quittent la mangeoire sans y être jamais arrivés. Il n'y a pas de parties vides car une partie ne se lance pas tant qu'on a pas vu un oiseau.
+
+```{r filtre sur les departs sans arrivee}
+
+temp_coherence_depart = temp_birdlab %>%
+  group_by(partie_id, numero_individu) %>%
+  mutate(
+    has_depart = any(action == "départ de l'oiseau"),
+    has_arrivee = any(action %in% c(
+      "arrivée sur la mangeoire gauche",
+      "arrivée sur la mangeoire droite"
+    )),
+    incoherent = if_else(has_depart & !has_arrivee, 1L, 0L)
+  ) %>%
+  ungroup() %>%
+  filter(incoherent == 0)
+  
+
+
+```
+
+```{r modification de la BD birdlab_creation saisons}
+
+# fonction qui permet de regrouper les données par saisons de birdlab, et d'identifier 
+# les données hors-saison
+#' Title
+#'
+#' @param dt_birdlab 
+#'
+#' @returns 
+#' @export
+#'
+#' @examples
+func_groupe_saison = function(dt_birdlab) {
+  
+  df_saison = dt_birdlab %>%
+    select(year, month) %>%
+    unique() %>%
+    mutate(valide = case_when(
+      month %in% c(11, 12, 1, 2, 3) ~ "saison",
+      TRUE ~ "hors-saison"
+    ))
+
+  
+  # données produites lors des saisons birdlab
+  df_groupe_saison = data.frame()
+  
+  for (y in unique(df_saison$year)-1) {
+    df = df_saison %>%
+      filter(year == y & month %in% c(11, 12) | year == y+1 & month %in% c(1, 2, 3)) %>%
+      mutate(saison = paste0(y, "-", y+1))
+    df_groupe_saison = bind_rows(df_groupe_saison, df)
+  }
+  
+  # données produites hors des saisons birdlab
+  
+  df_groupe_horssaison = data.frame()
+  for (y in unique(df_saison$year)-1) {
+    df = df_saison %>%
+      filter(year == y & month %in% c(4,5,6,7,8,9,10) ) %>%
+      mutate(saison = paste0(y, "_", "hors-saison"))
+    
+    df_groupe_horssaison = bind_rows(df_groupe_horssaison, df)
+  }
+  
+  
+  dt_birdlab = dt_birdlab %>%     
+    left_join(rbind(df_groupe_saison, df_groupe_horssaison))
+  
+  
+  return(dt_birdlab)
+}
+
+# data_birdlab 
+df_birdlab = func_groupe_saison(temp_coherence_depart)
+
+rm(temp_birdlab)
+```
+
+### coord_plaine_nature = coordonnées Plaine Nature
+
+```{r data birdlab Plaine Nature}
+# emprise spatiale Plaine Nature
+json_plaine_nature = '{"type": "FeatureCollection","name": "villageAthletes","crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },"features": [{ "type": "Feature", "properties": { }, "geometry": { "type": "MultiPolygon", "coordinates": [ [ [ [ 2.328302397552035, 48.922067901345237 ], [ 2.32981567138738, 48.923334320437128 ], [ 2.331231071790587, 48.924828257922385 ], [ 2.333060552098988, 48.92644581533628 ], [ 2.333745666123945, 48.926989936022409 ], [ 2.336877615952319, 48.925862115645039 ], [ 2.337186293699827, 48.926168806163972 ], [ 2.338014453510215, 48.925886848821236 ], [ 2.337291695857513, 48.925293249211663 ], [ 2.339234107049149, 48.924214858534825 ], [ 2.339776175288675, 48.923878475026783 ], [ 2.339023302733777, 48.923294745326601 ], [ 2.339994508329595, 48.922775319093915 ], [ 2.338887785673895, 48.922072848357288 ], [ 2.339836405093066, 48.921637509420734 ], [ 2.340626921275709, 48.922325145322304 ], [ 2.341515310890487, 48.921860126396467 ], [ 2.339746060386478, 48.920489779489607 ], [ 2.33878238351621, 48.919737804199627 ], [ 2.339490083717814, 48.919391495982325 ], [ 2.338661923907426, 48.917748972880204 ], [ 2.337961752431371, 48.916917796030702 ], [ 2.335770893296619, 48.917734130557733 ], [ 2.336331783350018, 48.918379767508057 ], [ 2.335240118145416, 48.918780503486708 ], [ 2.335371870842523, 48.918931397065208 ], [ 2.335940289621471, 48.918745872109326 ], [ 2.336663047274172, 48.91967348999794 ], [ 2.335443393735239, 48.920024743475018 ], [ 2.334521124855489, 48.919502809599713 ], [ 2.334411958335029, 48.919505283232859 ], [ 2.333275120777133, 48.919992586569272 ], [ 2.332469547143393, 48.920331469843077 ], [ 2.332160869395885, 48.920000007395508 ], [ 2.330542193402855, 48.920949864051636 ], [ 2.328121708138859, 48.921926911295728 ], [ 2.328302397552035, 48.922067901345237 ] ] ] ] } }]}'
+
+
+coord_plaine_nature = st_read(
+  dsn = json_plaine_nature,
+  quiet = TRUE
+) %>% 
+  mutate(NOM = "plaine_nature")
+
+```
+
+### coord_1001_voisins = coordonnées 1001 voisins
+
+```{r data birdlab 1001 voisins}
+# emprise spatiale 1001 voisins
+json_1001_voisins = '{"type": "FeatureCollection","name": "villageMedias","crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },"features": [{ "type": "Feature", "properties": { }, "geometry": { "type": "MultiPolygon", "coordinates": [ [ [ [ 2.420072557139776, 48.943024583355111 ], [ 2.420073023091361, 48.943019380665795 ], [ 2.420067979421824, 48.943018487004629 ], [ 2.420063769199778, 48.943012880064778 ], [ 2.420062648382413, 48.943017542425913 ], [ 2.419853817681765, 48.942792045255153 ], [ 2.419349393069956, 48.942742595638627 ], [ 2.418965428066935, 48.942421171936957 ], [ 2.418878847723117, 48.942445896910577 ], [ 2.418167383158698, 48.941896999613682 ], [ 2.418240788232805, 48.9415916419726 ], [ 2.418090213721817, 48.941421036485124 ], [ 2.418216319874769, 48.941142874113687 ], [ 2.418348072571884, 48.941061279524 ], [ 2.41838571619963, 48.9406978110948 ], [ 2.419277870177235, 48.939142841017727 ], [ 2.419797352240144, 48.939268946538014 ], [ 2.420369535381899, 48.939120587069297 ], [ 2.420130075744921, 48.938710898976481 ], [ 2.421566602744255, 48.938299656704928 ], [ 2.421472493674887, 48.938156239773946 ], [ 2.421431085684365, 48.937970786235013 ], [ 2.421427321321591, 48.937931222724195 ], [ 2.421865869584844, 48.937875895574457 ], [ 2.422385116374816, 48.937819177454948 ], [ 2.421165462835882, 48.93592008779553 ], [ 2.420194257240064, 48.93620693409509 ], [ 2.418898466938361, 48.9344919564561 ], [ 2.418503449222627, 48.934288066621242 ], [ 2.418390587018131, 48.934288066621242 ], [ 2.417656982688909, 48.934573512156931 ], [ 2.417559203297922, 48.934700972633571 ], [ 2.418556759433161, 48.936048674271575 ], [ 2.417438037871099, 48.936412949305087 ], [ 2.41696466925218, 48.935812056353456 ], [ 2.416783979838995, 48.935767545476715 ], [ 2.415569972844152, 48.938260093454787 ], [ 2.418285960586102, 48.93892617368131 ], [ 2.418014691193634, 48.940914934347788 ], [ 2.417875645043659, 48.941176253680126 ], [ 2.417160416116465, 48.941482850134911 ], [ 2.418357483478821, 48.942489165584945 ], [ 2.419071862013785, 48.943142740749323 ], [ 2.416245675962213, 48.944625355205332 ], [ 2.414223150117127, 48.942834970265309 ], [ 2.412908305434752, 48.943906125930063 ], [ 2.414279581219374, 48.945333062294772 ], [ 2.414364227872746, 48.945388656392268 ], [ 2.414550450510164, 48.945414600283222 ], [ 2.414714100706683, 48.945470194289918 ], [ 2.414866464682752, 48.945614738417362 ], [ 2.414826962911178, 48.945718513430165 ], [ 2.414719743816907, 48.945840819418201 ], [ 2.414539164289713, 48.945911237881383 ], [ 2.414279581219374, 48.946615417047866 ], [ 2.413777344409368, 48.947252875934325 ], [ 2.413698340866222, 48.947430769984116 ], [ 2.413681411535547, 48.947534541220314 ], [ 2.414019998149034, 48.948134927707542 ], [ 2.414742316257807, 48.947986684802096 ], [ 2.416796408379629, 48.94761607561162 ], [ 2.416677903064908, 48.947226932999065 ], [ 2.416785122159179, 48.947152810252604 ], [ 2.416852839481876, 48.946934147509033 ], [ 2.416993917237496, 48.946615417047866 ], [ 2.417360719402107, 48.946341158974974 ], [ 2.421085172150464, 48.944373127777325 ], [ 2.420072557139776, 48.943024583355111 ] ] ] ] } }]}'
+
+
+coord_1001_voisins = st_read(
+  dsn = json_1001_voisins,
+  quiet = TRUE
+) %>% 
+  mutate(NOM = "1001_voisins")
+
+```
+
+### df_birdlab_VA = parties du Village des athlètes et releves
+
+actuellement pas de transects sur les sites SOLIDEO donc les 2 tables de données transect\_... sont vides.
+
+**Plaine Nature**
+
+```{r jointure emprise plaine nature et table birdlab}
+# df_birdlab_VA = coord_birdlab_national %>%
+#   st_join(coord_plaine_nature) %>%
+#   filter(!is.na(NOM))
+
+```
+
+Comme il n'y a pas encore de transect sur les sites SOLIDEO, ceux-ci viennent combler le manque pour faire un test.
+
+```{r donnee de remplacement}
+df_birdlab_VA = df_birdlab %>% 
+  filter(partie_id %in% c(28842, 29, 28844))
+
+```
+
+### df_birdlab_VM = parties du Village des Medias et releves
+
+**1001 voisins**
+
+actuellement pas de transects sur les sites SOLIDEO donc les 2 tables de données transect\_... sont vides.
+
+```{r jointure emprise SOLIDEO et table birdlab}
+# df_birdlab_VM = coord_birdlab_national %>%
+#   st_join(coord_1001_voisins) %>%
+#   filter(!is.na(NOM))
+```
+
+Comme il n'y a pas encore de transect sur les sites SOLIDEO, ceux-ci viennent combler le manque pour faire un test.
+
+```{r donnee de remplacement VM}
+df_birdlab_VM = df_birdlab %>% 
+  filter(partie_id %in% c(28842))
+  
+  # filter(transect_id == "5_Prairie fleurie") %>%
+  # left_join(dt_birdlab_oso) %>%
+  # mutate(im = 0.63) # Pour avoir un exemple collant mieux au Cluster des médias
+```
+
+# CALCUL DU REFERENTIEL
+
+## 1\_ table de données pour construire les referentiels
+
+### dt_ref_national = filtres
+
+**nombre de sessions et dates**
+
+```{r retirer la première session pour les participants}
+
+dt_sans_premiere_session = df_birdlab %>%
+  group_by(user_id) %>%
+  filter(partie_id != min(partie_id)) %>%
+  ungroup()
+
+```
+
+**sessions à moins de 30 min l'une de l'autre** On garde la première de ces sessions
+
+```{r}
+
+temp = dt_sans_premiere_session %>%
+  mutate(jour = ymd(as.Date(date))) %>%
+  group_by(user_id, jour) %>%
+  mutate(nb_partie = n_distinct(partie_id)) %>%
+  ungroup()
+
+temp2 = temp %>% 
+  filter(nb_partie > 1) %>%
+  group_by(user_id, jour) %>%
+  mutate(
+  diff_minutes = as.numeric(difftime(date, lag(date), units = "mins")),
+  garder_partie = if_else(is.na(diff_minutes) | diff_minutes >= 30, TRUE, FALSE)
+  ) %>%
+  filter(garder_partie) %>%
+  ungroup()
+    
+dt_sans_replica = temp %>%
+  filter(nb_partie == 1) %>%
+  bind_rows(temp2) %>%
+  select(-diff_minutes, -garder_partie, -nb_partie, - jour)
+
+```
+
+**richesse en espèces & abondance**
+
+Pr enlever les outliers : Tukey's fences : borne = Q1 − k × IQR et Q3 + k × IQR avec k = 3 (permissif)
+
+```{r clean richesse et abondance}
+# calcul de la richesse et du nombre de points de contact par partie
+dt_richesse_contact = dt_sans_replica %>%
+  group_by(partie_id, user_nom, user_niveau) %>%
+  reframe(richesse = n_distinct(espece), 
+         nb_contact  = max(numero_individu) + 1) %>% # numerotation des individus commence à 0
+  ungroup()
+
+# enlever les outlier pour la richesse et le nombre de points de contact
+## calcul des fences pour la richesse et le nombre de contacts (bornes au delà desquels les valeurs sont considérés comme des outliers)
+iqr_fences <- function(x, k = 3) {
+  q <- stats::quantile(x, c(0.25, 0.75), na.rm = TRUE)
+  iqr <- q[2] - q[1]
+
+  c(
+    lower = q[1] - k * iqr,
+    upper = q[2] + k * iqr
+  )
+}
+
+
+f_richesse <- iqr_fences(dt_richesse_contact$richesse, k = 3)
+f_contact  <- iqr_fences(dt_richesse_contact$nb_contact,  k = 3)
+
+
+
+dt_ref_national <- dt_richesse_contact |>
+  filter(
+    richesse >= f_richesse[1] & richesse <= f_richesse[2],
+    nb_contact >= f_contact[1] & nb_contact <=  f_contact[2]) %>%
+  left_join(df_birdlab)
+  
+
+
+
+```
+
+### df_birdlab_MGP = données Métropole Grand Paris
+
+Toutes les données birdlab.
+```{r data birdlab Metropole Grand Paris}
+
+df_birdlab_MGP = coord_birdlab_national %>%
+  st_join(coord_grand_paris) %>%
+  filter(!is.na(NOM)) %>%
+  as.data.frame() %>%
+  select(partie_id, NOM) %>%
+  rename(MGP = NOM)
+
+
+```
+
+### df_birdlab_biogeo = information sur les biogeoregions associées à chaque session
+
+Toutes les données birdlab.
+```{r df_birdlab_biogeo}
+df_birdlab_biogeo = coord_birdlab_national %>%
+  st_join(biogeoregions) %>%
+  filter(!is.na(N_DOMAINE)) %>%
+  as.data.frame() %>%
+  select(partie_id, N_DOMAINE) %>%
+  rename(biogeo = N_DOMAINE)
+
+```
+
+## 2\_ boucle de calcul
+
+![](image/ordre_de_priorite_referentiels.png){fig-align="center" width="100%"}
+
+Les rangs hierarchiques associés à chaque filtre vont du plus fin (1) au moins fin (chiffre le plus grand).
+
+```{r referentiels potentiels}
+
+
+## SESSION ----
+# version taux urbanisation
+#' Title
+#'
+#' @param taux_urba taux d'urbanisation du site étudié
+#'
+#' @returns le df contenant le référentiel choisi pour chaque session
+#' @export
+#'
+#' @examples
+func_choix_ref = function() { 
+  
+  # toutes les données birdlab
+  df_merge = df_birdlab %>%
+    select(partie_id, mangeoires_type, user_niveau, environnement) %>%
+    unique() %>%
+    left_join(df_birdlab_MGP) %>%
+    left_join(df_birdlab_biogeo)
+  
+  # toutes les données birdlab
+  # 0_ construction des combinaisons : M * N * E  
+  # Construction de TOUS LES REFERENTIELS POSSIBLES !!! 
+  # Liste des référentiels possibles, sachant que NA est possible pour M et CS : 
+  # N, M, E x N, E x M, M x N, M x E x N
+  df_combi = df_merge %>%
+    mutate(
+      combi_noref = "6noref",
+      combi_M = paste0("5", mangeoires_type),
+      combi_N = paste0("5", user_niveau),
+      combi_M_N = paste0("3", mangeoires_type,"---", user_niveau),
+      combi_N_E = paste0("4", user_niveau,"---", environnement),
+      combi_M_E = paste0("4", mangeoires_type,"---", environnement),
+      combi_M_N_E = paste0("2", user_niveau, "---", mangeoires_type,"---", environnement),
+      combi_M_N_E_B = paste0("1", user_niveau, "---", mangeoires_type,"---", environnement, "---", biogeo),
+      combi_M_N_E_A = paste0("0", user_niveau, "---", mangeoires_type,"---", environnement, "---", MGP)) %>%
+    
+    rename(M = mangeoires_type, N = user_niveau) 
+  
+  
+  
+  # /!\ on recupere les sessions de reference
+  df_combi_ref = df_combi %>% filter(partie_id %in% unique(dt_ref_national$partie_id))
+  
+  # sessions de reference
+  # 1 calcul du nombre de sessions POUR TOUS LES REFERENTIELS POSSIBLES !!!!!!!
+  # N, M, U x N, U x M, M x N, M x U x N
+  
+  df_ref_noref = df_combi_ref %>%
+    mutate(ref_lies = "no_ref") %>%
+    rename(combi = combi_noref)  %>%   
+  # on retire les référentiels avec des NA
+    filter(!str_detect(combi, "NA"))  %>%
+    count(combi)
+  
+  df_ref_M_N_E_B = df_combi_ref %>%
+    mutate(ref_lies = "M_N_E_B") %>%
+    rename(combi = combi_M_N_E_B) %>%   
+  # on retire les référentiels avec des NA
+    filter(!str_detect(combi, "NA"))  %>%
+    count(combi)
+  
+  
+  df_ref_M_N_E_A = df_combi_ref %>%
+    mutate(ref_lies = "M_N_E_A") %>%
+    rename(combi = combi_M_N_E_A) %>%   
+  # on retire les référentiels avec des NA
+    filter(!str_detect(combi, "NA"))  %>%
+    count(combi)
+  
+  
+  df_ref_M  = df_combi_ref %>%
+    mutate(ref_lies = "M") %>%
+    rename(combi = combi_M) %>%   
+  # on retire les référentiels avec des NA
+    filter(!str_detect(combi, "NA"))  %>%
+    count(combi)
+  
+  df_ref_N  = df_combi_ref %>%
+    mutate(ref_lies = "N")  %>%
+    rename(combi = combi_N) %>%   
+  # on retire les référentiels avec des NA
+    filter(!str_detect(combi, "NA"))  %>%
+    count(combi)
+  
+  df_ref_M_N  = df_combi_ref %>%
+    mutate(ref_lies = "M_N")  %>%
+    rename(combi = combi_M_N) %>%   
+  # on retire les référentiels avec des NA
+    filter(!str_detect(combi, "NA"))  %>%
+    count(combi)
+  
+  df_ref_N_E  = df_combi_ref %>%
+    mutate(ref_lies = "N_E") %>%
+    rename(combi = combi_N_E) %>%   
+  # on retire les référentiels avec des NA
+    filter(!str_detect(combi, "NA"))  %>%
+    count(combi)
+  
+  df_ref_M_E  = df_combi_ref %>%
+    mutate(ref_lies = "M_E") %>%
+    rename(combi = combi_M_E) %>%   
+  # on retire les référentiels avec des NA
+    filter(!str_detect(combi, "NA"))  %>%
+    count(combi)
+  
+  df_ref_N_M_E  = df_combi_ref %>%
+    mutate(ref_lies = "M_N_E") %>%
+    rename(combi = combi_M_N_E) %>%   
+  # on retire les référentiels avec des NA
+    filter(!str_detect(combi, "NA"))  %>%
+    count(combi)
+  
+  # sessions de reference
+  # 2_ taille des différents référentiels
+  df_merge_ref_partie_id =  df_ref_M %>%
+    bind_rows(df_ref_N) %>%
+    bind_rows(df_ref_M_N) %>%
+    bind_rows(df_ref_N_E) %>%
+    bind_rows(df_ref_M_E) %>%
+    bind_rows(df_ref_N_M_E)  %>%
+    bind_rows(df_ref_noref) %>%
+    bind_rows(df_ref_M_N_E_A) %>%
+    bind_rows(df_ref_M_N_E_B)
+
+  
+  
+    # toutes les sessions
+  # 3_ tous les ref_lies associes à chaque session, avec leur taille et leur score de finesse 
+  dt_ref_lies <- df_combi %>%
+    
+    # on passe les lignes en colonnes : création d'une colonne combi contenant toutes les combinaisons possibles de référentiel
+    pivot_longer(cols = starts_with("combi_"),
+                 values_to = "combi") %>% 
+    
+  # on retire les référentiels avec des NA
+    filter(!str_detect(combi, "NA")) %>%
+    
+  # join avec le calcul du nombre de parties de reference par referentiel
+    left_join(df_merge_ref_partie_id) %>%
+    rename(n_ref_lies = n) %>%
+    
+    # extraction du score de priorité du référentiel de la chaine de caractères et créaton d'une colonne les contenant
+    mutate(finesse_ref = str_extract(combi, "\\d+")) %>%
+    mutate(combi = str_remove(combi, "\\d+")) %>%
+    
+    # on enlève les referentiels de moins de 30 sessions
+    filter(n_ref_lies > 29) %>%
+    rename(ref_lies = combi)
+  
+
+
+  
+  return(dt_ref_lies)
+}
+
+df_ref_lies = func_choix_ref()
+
+# df contenant toutes les référentiels possibles associés à chaque sessions
+
+
+
+```
+
+## 3_conditions et selection
+
+### dt_VA & VM : selection des référentiels liés aux sites
+
+3 critères pour retenir un référentiel : poids des données locales : doivent représenter moins de 50 % des données du référentiel taille : le référentiel doit faire au moins 30 parties pour etre retenu score de finesse : doit être minimal lorsque les 2 autres critères ont été pris en compte
+
+```{r fonction choix ref localement}
+# fonction qui associe aux sessions locales les referentiels choisis
+func_choix_ref_site = function(df_site) {
+  
+  # calcul du poids des données locales 
+dt_poids = df_ref_lies %>%
+  filter(partie_id %in% unique(df_site$partie_id)) %>%
+  group_by(ref_lies) %>%
+  mutate(poids = n_distinct(partie_id) / n_ref_lies) %>%
+  ungroup()
+
+# selection des ref par session locale
+ref_choisis = dt_poids %>%
+  filter(poids <= 0.5 ) %>%
+  group_by(partie_id) %>%
+  mutate(ref_choisi = ref_lies[which.min(finesse_ref)], 
+         n_ref_choisi = n_ref_lies[which.min(finesse_ref)]) %>%
+  select(partie_id, ref_choisi, n_ref_choisi) %>%
+  unique()
+
+  return(ref_choisis)
+
+}
+
+dt_VA = func_choix_ref_site(df_birdlab_VA) %>%
+  left_join(df_birdlab)
+dt_VM = func_choix_ref_site(df_birdlab_VM) %>%
+  left_join(df_birdlab)
+```
+
+### df_ref_VA & VM
+
+```{r fonction df ref}
+# fonction qui donne un df contenant toutes les données des référentiels associés aux sessions locales
+func_df_ref_site = function(df_site) {
+
+  ref_choisis = func_choix_ref_site(df_site) %>%
+  pull(ref_choisi) %>%
+  unique()
+  
+  # df final regroupant les sessions dont ref_lies sont dans ref_choisis
+  dt_ref_site = df_ref_lies %>%
+    filter(partie_id %in% unique(dt_ref_national$partie_id)) %>%
+    filter(ref_lies %in% ref_choisis) %>%
+    select(partie_id, ref_lies, n_ref_lies) %>%
+    unique() %>%
+    left_join(dt_ref_national)
+  
+  
+
+
+return(dt_ref_site)
+  
+}
+
+
+df_ref_VA = func_df_ref_site(df_site = df_birdlab_VA)%>%
+  left_join(df_birdlab)
+
+df_ref_VM = func_df_ref_site(df_birdlab_VM)%>%
+  left_join(df_birdlab)
+
+```
+
+# INDICATEURS
+
+## indicateurs par référentiel
+
+### fréquences d'espèces - regroupement taxonomique
+
+
+```{r}
+# ref et local combiné sur un meme graphe
+
+
+
+func_plot_freq_combi = function(dt_birdlab_local, dt_ref) {
+  
+  # top / flop des espèces les plus fréquentes
+df_freq_sp_local = dt_birdlab_local %>%
+  filter(espece != "Espèce inconnue" ) %>%
+  group_by(ref_choisi) %>%
+  mutate(nb_partie_ref = n_distinct(partie_id)) %>%
+  ungroup() %>%
+  group_by(espece, ref_choisi, nb_partie_ref) %>%
+  summarize(freq = (n_distinct(partie_id)/ n_distinct(dt_birdlab_local$partie_id)) * 100) %>%
+  ungroup() %>%
+  arrange(desc(freq)) %>% 
+  mutate(ref_nbpartie = paste0(ref_choisi, " : ", nb_partie_ref, " session(s)")) %>%
+  mutate(combi_sp_ref = paste0(ref_choisi, espece))
+
+
+dt_nb_sessions_locales_par_ref =  df_freq_sp_local %>% select(ref_choisi, ref_nbpartie) %>% unique()
+
+
+# rerentiel : a modif
+df_freq_sp_ref = dt_ref %>%
+  filter( espece != "Espèce inconnue" ) %>%
+  group_by(espece, ref_lies) %>%
+  summarize(freq = (n_distinct(partie_id)/ n_distinct(dt_ref$partie_id)) * 100) %>%
+  ungroup() %>%
+  arrange(desc(freq)) %>%
+  filter(espece %in% df_freq_sp_local$espece) %>%
+  rename(ref_choisi = ref_lies)  %>% 
+  mutate(combi_sp_ref = paste0(ref_choisi, espece)) %>%
+  filter(combi_sp_ref %in% df_freq_sp_local$combi_sp_ref)
+
+  
+
+  
+  
+  
+  df_freq_combi = df_freq_sp_local %>%
+    select(-ref_nbpartie, -nb_partie_ref) %>%
+    mutate(echelle = "local") %>%
+    rbind(df_freq_sp_ref %>% mutate(echelle = "ref")) %>%
+    left_join(dt_nb_sessions_locales_par_ref)
+  
+  
+  # 1. Extraire la fréquence locale par espèce
+  # ordre_local <- df_freq_combi |>
+  #   filter(echelle == "local") |>
+  #   mutate(ordre = row_number()) %>%
+  #   select(espece, ordre)
+  # 
+  # 2. Joindre et trier les espèces par freq locale décroissante
+  # df_freq_combi <- df_freq_combi |>
+  #   # left_join(ordre_local) |>
+  #   # mutate(ordre = replace_na(ordre, 100))
+  
+  
+  # 3. Tracer le graphique avec position_dodge2
+
+    plot_freq_combi <- ggplot(df_freq_combi ,  aes(x = espece, y = freq, fill = echelle)) + # reorder(espece, -ordre)
+    geom_col( position = position_dodge2(width = 0.6, preserve = "single"), width = 0.6) +
+    # labs(title = paste0("Fréquence des espèces\n(référentiel (", nb_parties_ref, " parties) vs local (", ntot_partie, " parties)"),
+    #      x = "Espèce",
+    #      y = "Fréquence d'observation (%)",
+    #      fill = "Échelle") +
+    coord_flip() +
+    facet_wrap(~ ref_nbpartie, scales = "free_y", ncol = 1) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(size = 8),
+          axis.text.y = element_text(size = 8),
+          legend.title = element_text(size = 8),
+          legend.text = element_text(size = 8)) +
+    scale_fill_manual(values = c("ref" = "lightgrey", "local" = "steelblue")) + 
+        labs(title = paste0("site local : ",n_distinct(dt_birdlab_local$partie_id), " partie(s) répartie(s) dans le(s) référentiel(s) :" ) , x = "espece")
+  
+  
+  return(plot_freq_combi)
+
+}
+
+
+func_plot_freq_combi(dt_birdlab_local = dt_VA, dt_ref = df_ref_VA)
+func_plot_freq_combi(dt_birdlab_local = dt_VM, dt_ref = df_ref_VM)
+
+
+
+```
+
+### activite de la mangeoire
+
+Prévoir la situation où il y aurait plusieurs mangeoires
+
+```{r }
+
+func_expl_indic_contact = function(df_local, df_ref , titre = NULL) {
+  
+  parties_locales = df_local %>%
+  pull(partie_id) %>%
+  unique()
+
+  sel_ref_locaux = df_local %>%
+    pull(ref_choisi) %>%
+    unique()
+
+df_activite_ref = df_ref %>%
+  mutate(echelle = "ref") %>%
+  mutate(nb_partie = n_distinct(partie_id)) %>%
+  rename(ref_choisi = ref_lies) %>%
+  select(partie_id, nb_contact, nb_partie, echelle, ref_choisi) %>%
+  unique()
+
+
+df_activite_local = df_local %>% 
+  group_by(partie_id) %>%
+  mutate(nb_contact = n_distinct(numero_individu)) %>% 
+  ungroup() %>%
+  mutate(nb_partie = n_distinct(partie_id)) %>%
+  select(partie_id, nb_contact, nb_partie, ref_choisi) %>%
+  unique() %>% 
+  mutate(echelle = "local")
+
+
+plot = df_activite_local %>%
+  bind_rows(df_activite_ref) %>%
+  ggplot(aes(x = ref_choisi, y = nb_contact, fill = echelle)) +
+  geom_boxplot() +
+    theme_minimal() +
+  labs(y = "Nombre de points de contact total par partie", 
+       x = "échelle", title = paste0(titre, " : ", unique(df_activite_local$nb_partie), " partie(s)\n referentiel : ", unique(df_activite_ref$nb_partie), " parties" ))
+
+return(plot)
+  
+}
+
+
+# plot_activite_VA =
+  func_expl_indic_contact(df_local = dt_VA, df_ref = df_ref_VA , titre = "VA") 
+# plot_activite_VM = 
+  func_expl_indic_contact(df_local = dt_VM, df_ref = df_ref_VM , titre = "VM") 
+
+```
+
+
+## indicateurs en agrégeant les référentiels
+
+
+### fréquences d'espèces - agrégé
+
+
+```{r freq ref agrege}
+# ref et local combiné sur un meme graphe
+
+
+
+func_plot_freq_combi = function(dt_birdlab_local, dt_ref) {
+  
+  # top / flop des espèces les plus fréquentes
+df_freq_sp_local = dt_birdlab_local %>%
+  filter(espece != "Espèce inconnue" ) %>%
+  group_by(espece) %>%
+  summarize(freq = (n_distinct(partie_id)/ n_distinct(dt_birdlab_local$partie_id)) * 100) %>%
+  ungroup() %>%
+  arrange(desc(freq)) %>%
+  mutate(echelle = "local")
+
+
+df_freq_sp_ref = dt_ref %>%
+  filter( espece != "Espèce inconnue" ) %>%
+  group_by(espece) %>%
+  summarize(freq = (n_distinct(partie_id)/ n_distinct(dt_ref$partie_id)) * 100) %>%
+  ungroup() %>%
+  arrange(desc(freq)) %>%
+  filter(espece %in% df_freq_sp_local$espece) %>%
+  mutate(echelle = "ref")
+
+  
+  df_freq_combi = df_freq_sp_local %>%
+    bind_rows(df_freq_sp_ref)
+  
+  
+  # 1. Extraire la fréquence locale par espèce
+  ordre_local <- df_freq_combi |>
+    filter(echelle == "local") |>
+    mutate(ordre = row_number()) %>%
+    select(espece, ordre)
+
+  # 2. Joindre et trier les espèces par freq locale décroissante
+  df_freq_combi <- df_freq_combi |>
+    left_join(ordre_local) |>
+    mutate(ordre = replace_na(ordre, 100))
+
+  
+  # 3. Tracer le graphique avec position_dodge2
+
+    plot_freq_combi <- ggplot(df_freq_combi ,  aes(x = reorder(espece, -ordre), y = freq, fill = echelle)) + # reorder(espece, -ordre)
+    geom_col(position = "dodge", width = 0.6) +
+    coord_flip() +
+    theme_minimal() +
+    scale_fill_manual(values = c("ref" = "lightgrey", "local" = "steelblue")) + 
+        labs(title = paste0("site local : ",n_distinct(dt_birdlab_local$partie_id), " partie(s)" ) , 
+             x = "espece")
+  
+  
+  return(plot_freq_combi)
+
+}
+
+
+func_plot_freq_combi(dt_birdlab_local = dt_VA, dt_ref = df_ref_VA)
+func_plot_freq_combi(dt_birdlab_local = dt_VM, dt_ref = df_ref_VM)
+
+
+
+```
+
+
+### activite de la mangeoire - agrégé
+
+```{r aggregation des données par référentiel}
+
+
+func_agregation_activite_par_ref =  function(df_local, df_ref){
+
+  
+  parties_locales = df_local %>%
+  pull(partie_id) %>%
+  unique()
+
+  sel_ref_locaux = df_local %>%
+    pull(ref_choisi) %>%
+    unique()
+
+df_activite_ref = df_ref %>%
+  mutate(echelle = "ref") %>%
+  mutate(nb_partie = n_distinct(partie_id)) %>%
+  rename(ref_choisi = ref_lies) %>%
+  select(partie_id, nb_contact, nb_partie, echelle, ref_choisi) %>%
+  unique() %>%
+  group_by(ref_choisi, nb_partie, echelle) %>%
+  reframe(median_nb_contact = median(nb_contact),
+          q1_nb_contact = quantile(nb_contact, 0.25),
+          q3_nb_contact = quantile(nb_contact, 0.75)) %>%
+  ungroup()
+
+
+df_activite_local = df_local %>% 
+  group_by(partie_id) %>%
+  mutate(nb_contact = n_distinct(numero_individu)) %>% 
+  ungroup() %>%
+  mutate(nb_partie = n_distinct(partie_id)) %>%
+  select(partie_id, nb_contact, nb_partie, ref_choisi) %>%
+  unique() %>% 
+  mutate(echelle = "local") %>%
+  group_by(ref_choisi, nb_partie, echelle) %>%
+  reframe(median_nb_contact = median(nb_contact),
+          q1_nb_contact = quantile(nb_contact, 0.25),
+          q3_nb_contact = quantile(nb_contact, 0.75)) %>%
+  ungroup()
+
+
+bind_ref_local = df_activite_ref %>%
+  bind_rows(df_activite_local)
+
+return(bind_ref_local)
+
+}
+
+
+# activite_agregee_par_ref_VA = 
+  func_agregation_activite_par_ref(df_local = dt_VA, df_ref = df_ref_VA)
+# activite_agregee_par_ref_VM =
+  func_agregation_activite_par_ref(df_local = dt_VM, df_ref = df_ref_VM)
+
+
+```
+
+
+```{r}
+
+func_plot_activite_agregee = function(df_local, df_ref, titre) {
+  
+  bind_agrege = func_agregation_activite_par_ref(df_local, df_ref)
+  
+  nb_partie_local = bind_agrege %>% filter(echelle == "local") %>% pull(nb_partie) %>% unique()
+  nb_partie_ref = bind_agrege %>% filter(echelle == "ref") %>% pull(nb_partie) %>% unique()
+  
+  plot =
+    ggplot(bind_agrege, aes(x = echelle, y = median_nb_contact, fill = echelle)) +
+  geom_boxplot() +
+  geom_point() +
+  labs(y = "Nombre de points de contact total par partie", 
+       x= "échelle", 
+       title = paste0(titre, " : ", nb_partie_local, " partie(s)\n referentiel : ", nb_partie_ref, " parties" )) +
+  theme_minimal()
+  
+  return(plot)
+}
+
+
+# plot_va_agrege_par_ref = 
+  func_plot_activite_agregee(df_local = dt_VA, df_ref = df_ref_VA, titre = "VA")
+# plot_vm_agrege_par_ref = 
+  func_plot_activite_agregee(df_local = dt_VM, df_ref = df_ref_VM, titre = "VM")
+
+```
+
+
+```{r relier points}
+
+# graphe avec coord parallèles
+
+func_plot_relier_valeurs = function(df_local, df_ref ){
+  
+  bind_agrege = func_agregation_activite_par_ref(df_local, df_ref)
+
+
+bind_large= bind_agrege %>% 
+  select(ref_choisi, echelle, median_nb_contact) %>%
+  pivot_wider(names_from = echelle, values_from = median_nb_contact) %>%
+  mutate(jugement = case_when(local > ref ~ "positif",
+                              TRUE ~ "negatif")) 
+
+
+print(DT::datatable(bind_large))
+
+
+plot_parralel_coord  = ggparcoord(bind_large,
+    columns = 2:3, groupColumn = 4,
+    scale = "Globalminmax", 
+    showPoints = TRUE,
+
+    ) +
+    theme_minimal() +
+  labs(y = "Richesse moyenne en insectes par plante")
+
+  return(plot_parralel_coord)
+  
+}
+
+
+# parralel_coord_VM =
+  func_plot_relier_valeurs(df_local = dt_VM, df_ref = df_ref_VM)
+# parralel_coord_VA = 
+  func_plot_relier_valeurs(df_local = dt_VA, df_ref = df_ref_VA)
+
+
+
+```
+
+
+
+
